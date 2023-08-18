@@ -5,7 +5,11 @@
   "src/test"]
 
  :dependencies
- []
-
+ [[com.pitch/uix.core "0.10.0"]
+  [com.pitch/uix.dom "0.10.0"]
+  ^:dev [binaryage/devtools "1.0.7"]]
+ :dev-http {8080 "public"}
  :builds
- {}}
+ {:app {:target :browser
+        :modules {:main {:init-fn paatheedu.app/init}}
+        :devtools {:preloads [preload devtools.preload]}}}}
