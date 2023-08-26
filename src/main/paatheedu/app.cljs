@@ -1,11 +1,14 @@
 (ns paatheedu.app
   (:require [uix.core :as uix :refer [defui $]]
             [uix.dom]
-            [goog.object]
-            ["xlsx" :as XLSX]))
+            ["xlsx" :as XLSX]
+            ["pouchdb" :as PouchDB]
+            ["moment" :as moment]))
 
 (defonce root
   (uix.dom/create-root (js/document.getElementById "root")))
+
+(defonce db (new PouchDB "paatheedu"))
 
 (def hdfc-bank-statement-sheet-schema
   #:sheet.schema{:transaction-date-column-name "A"
@@ -16,7 +19,8 @@
                  :credit-column-name "F"
                  :closing-balance-column-name "G"
                  :first-transaction-row-number 23
-                 :sheet-name "Sheet 1"})
+                 :sheet-name "Sheet 1"
+                 :date-format "DD/MM/YY"})
 
 (def idfc-bank-statement-sheet-schema
   #:sheet.schema{:transaction-date-column-name "A"
@@ -27,7 +31,8 @@
                  :credit-column-name "F"
                  :closing-balance-column-name "G"
                  :first-transaction-row-number 22
-                 :sheet-name "Account Statement"})
+                 :sheet-name "Account Statement"
+                 :date-format "DD-MMM-YYYY"})
 
 (defn- extract-transaction-data-from-sheet [{:sheet.schema/keys [transaction-date-column-name
                                                                  narration-column-name
@@ -58,6 +63,31 @@
           []
           (filter #(<= first-transaction-row-number %) (range))))
 
+(defn- parse-date-to-epoch [date-format date]
+  (.unix (moment date date-format)))
+
+(defn- transform-transaction-data [{:sheet.schema/keys [date-format]} transactions]
+  (map (fn [{:transaction/keys [date value-date narration] :as transaction}]
+         (assoc transaction
+                :transaction/id (hash-string (str date ":" narration))
+                :transaction/date (parse-date-to-epoch date-format date)
+                :transaction/value-date (parse-date-to-epoch date-format value-date))) transactions))
+
+
+(defn- save-transactions [transactions]
+  (as-> (map #(assoc % :transaction/_id (str (:transaction/id %))
+                     :_type "transaction") transactions) $
+    (map clj->js $)
+    (clj->js $)
+    (.bulkDocs db $)
+    (.then $ #(js/console.log %))
+    (.catch $ #(js/console.log %))))
+
+(comment 
+  (-> (.get db "1074069436")
+      (.then prn))
+  )
+
 (defn- on-file-upload [bank-statement-sheet-schema set-value! ^js e]
   (.preventDefault e)
   (let [js-file-reader (js/FileReader.)
@@ -68,34 +98,33 @@
                   xl-content (XLSX/read file-content)
                   extracted-content (extract-transaction-data-from-sheet
                                      bank-statement-sheet-schema
-                                     (js->clj (unchecked-get (.-Sheets xl-content) 
-                                                     (:sheet.schema/sheet-name bank-statement-sheet-schema))))]
-              (set-value! extracted-content))))
+                                     (js->clj (unchecked-get (.-Sheets xl-content)
+                                                             (:sheet.schema/sheet-name bank-statement-sheet-schema))))
+                  transactions (transform-transaction-data bank-statement-sheet-schema extracted-content)]
+              (save-transactions transactions)
+              (set-value! transactions))))
     (if uploaded-file
       (.readAsArrayBuffer js-file-reader uploaded-file)
       (set-value! []))))
 
-
-
-
 (defn- render-transactions [transactions]
   (when (seq transactions)
     ($ :table
-      ($ :thead
-         ($ :tr
-            ($ :th "Transaction Date")
-            ($ :th "Narration")
-            ($ :th "Debit")
-            ($ :th "Credit")
-            ($ :th "Closing Balance")))
-      ($ :tbody
-         (map (fn [{:transaction/keys [date narration debit credit closing-balance]}]
-                ($ :tr {:key (gensym)}
-                   ($ :td date)
-                   ($ :td narration)
-                   ($ :td debit)
-                   ($ :td credit)
-                   ($ :td closing-balance))) transactions)))))
+       ($ :thead
+          ($ :tr
+             ($ :th "Transaction Date")
+             ($ :th "Narration")
+             ($ :th "Debit")
+             ($ :th "Credit")
+             ($ :th "Closing Balance")))
+       ($ :tbody
+          (map (fn [{:transaction/keys [date narration debit credit closing-balance]}]
+                 ($ :tr {:key (gensym)}
+                    ($ :td date)
+                    ($ :td narration)
+                    ($ :td debit)
+                    ($ :td credit)
+                    ($ :td closing-balance))) transactions)))))
 
 (defui app []
   (let [[value set-value!] (uix/use-state [])]

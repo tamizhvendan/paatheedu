@@ -3,7 +3,6 @@
  ["src/dev"
   "src/main"
   "src/test"]
-
  :dependencies
  [[com.pitch/uix.core "0.10.0"]
   [com.pitch/uix.dom "0.10.0"]
