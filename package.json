@@ -17,8 +17,11 @@
     "tailwindcss": "^3.3.3"
   },
   "dependencies": {
+    "memorystream": "^0.3.1",
     "moment": "^2.29.4",
     "pouchdb": "^8.0.1",
+    "pouchdb-load": "^1.4.6",
+    "pouchdb-replication-stream": "^1.2.9",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.0/xlsx-0.20.0.tgz"
   }
 }

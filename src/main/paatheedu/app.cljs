@@ -3,12 +3,31 @@
             [uix.dom]
             ["xlsx" :as XLSX]
             ["pouchdb" :as PouchDB]
-            ["moment" :as moment]))
+            ["moment" :as moment]
+            ["pouchdb-replication-stream" :as replicationStream]
+            ["memorystream" :as MemoryStream]
+            ["pouchdb-load" :as pouchdbLoad]))
+
+(defn- export-db [db on-success]
+  (let [dumped-string (atom "")
+        stream (new MemoryStream)]
+    (.on stream "data" (fn [chunk]
+                         (reset! dumped-string (str @dumped-string chunk))))
+    (-> (.dump db stream)
+        (.then #(on-success @dumped-string)))))
+
+(defn- import-db [db backup on-success]
+  (-> (.load db backup)
+      (.then on-success)))
 
 (defonce root
   (uix.dom/create-root (js/document.getElementById "root")))
 
-(defonce db (new PouchDB "paatheedu"))
+(defonce db (do 
+              (.plugin PouchDB (.-plugin replicationStream))
+              (.plugin PouchDB pouchdbLoad)
+              (.adapter PouchDB "writableStream" (.. replicationStream -adapters -writableStream))
+              (new PouchDB "paatheedu")))
 
 (def hdfc-bank-statement-sheet-schema
   #:sheet.schema{:transaction-date-column-name "A"
@@ -132,6 +151,14 @@
   
   (get-all-bank-accounts prn prn)
   (get-all-transactions prn prn)
+  (def backup (atom ""))
+  (export-db db (fn [x]
+                  (reset! backup x)
+                  (prn x)))
+  (count @backup)
+  (js/download "paatheedu.txt" @backup)
+  (def new-db (new PouchDB "temp3"))
+  (import-db new-db @backup prn)
   )
 
 (defn- on-file-upload [on-success ^js e]
