@@ -74,38 +74,88 @@
                 :transaction/value-date (parse-date-to-epoch date-format value-date))) transactions))
 
 
-(defn- save-transactions [transactions]
-  (as-> (map #(assoc % :transaction/_id (str (:transaction/id %))
-                     :_type "transaction") transactions) $
+(defn- save-transactions [bank-account-id transactions]
+  (as-> (map #(assoc % 
+                     :_id (str "transaction:" (:transaction/id %))
+                     :transaction/bank-account-id bank-account-id
+                     :type "transaction") transactions) $
     (map clj->js $)
     (clj->js $)
     (.bulkDocs db $)
     (.then $ #(js/console.log %))
     (.catch $ #(js/console.log %))))
 
-(comment 
-  (-> (.get db "1074069436")
-      (.then prn))
+(defn- save-bank-account [name schema on-success on-error]
+  (-> (.put db (clj->js (assoc schema
+                               :name name
+                               :_id (str "bank-account:" (.valueOf (new js/Date)))
+                               :type "bank-account")))
+      (.then on-success)
+      (.catch on-error)))
+
+(defn- get-all-bank-accounts [on-success on-error]
+  (-> (.allDocs db #js {:include_docs true
+                        :startkey "bank-account:"
+                        :endkey "bank-account:\ufff0"})
+      (.then (fn [r]
+               (on-success
+                (->> ((js->clj r) "rows")
+                     (map #(get % "doc"))
+                     (map (fn [doc]
+                            (update-keys doc (fn [key]
+                                               (if (#{"name" "_rev", "_id", "type"} key)
+                                                 (keyword key)
+                                                 (keyword "sheet.schema" key))))))))))
+      (.catch on-error)))
+
+(defn- get-all-transactions [on-success on-error]
+  (-> (.allDocs db #js {:include_docs true
+                        :startkey "transaction:"
+                        :endkey "transaction:\ufff0"})
+      (.then (fn [r]
+               (on-success
+                (->> ((js->clj r) "rows")
+                     (map #(get % "doc"))
+                     (map (fn [doc]
+                            (update-keys doc (fn [key]
+                                               (if (#{"_rev", "_id", "type"} key)
+                                                 (keyword key)
+                                                 (keyword "transaction" key))))))))))
+      (.catch on-error)))
+
+(comment
+  (.destroy db)
+  ; HDFC bank-account:1693045183269
+  (save-bank-account "HDFC" hdfc-bank-statement-sheet-schema prn prn)
+  ; IDFC bank-account:1693045190153
+  (save-bank-account "IDFC" idfc-bank-statement-sheet-schema prn prn)
+  
+  (get-all-bank-accounts prn prn)
+  (get-all-transactions prn prn)
   )
 
-(defn- on-file-upload [bank-statement-sheet-schema set-value! ^js e]
+(defn- on-file-upload [on-success ^js e]
   (.preventDefault e)
   (let [js-file-reader (js/FileReader.)
         uploaded-file (-> e .-target .-files first)]
     (set! (.-onload js-file-reader)
           (fn [evt]
-            (let [file-content (-> evt .-target .-result)
-                  xl-content (XLSX/read file-content)
-                  extracted-content (extract-transaction-data-from-sheet
-                                     bank-statement-sheet-schema
-                                     (js->clj (unchecked-get (.-Sheets xl-content)
-                                                             (:sheet.schema/sheet-name bank-statement-sheet-schema))))
-                  transactions (transform-transaction-data bank-statement-sheet-schema extracted-content)]
-              (save-transactions transactions)
-              (set-value! transactions))))
+            (on-success (-> evt .-target .-result))))
     (if uploaded-file
       (.readAsArrayBuffer js-file-reader uploaded-file)
-      (set-value! []))))
+      (on-success nil))))
+
+(defn- on-file-upload-success [bank-account-id bank-statement-sheet-schema set-value! file-content]
+  (let [xl-content (XLSX/read file-content)
+        extracted-content (extract-transaction-data-from-sheet
+                           bank-statement-sheet-schema
+                           (js->clj (unchecked-get (.-Sheets xl-content)
+                                                   (:sheet.schema/sheet-name bank-statement-sheet-schema))))
+        transactions (transform-transaction-data bank-statement-sheet-schema extracted-content)]
+
+    (set-value! transactions)
+    (when (seq transactions)
+      (save-transactions bank-account-id transactions))))
 
 (defn- render-transactions [transactions]
   (when (seq transactions)
@@ -127,9 +177,10 @@
                     ($ :td closing-balance))) transactions)))))
 
 (defui app []
-  (let [[value set-value!] (uix/use-state [])]
+  (let [[value set-value!] (uix/use-state [])
+        on-file-upload-success (partial on-file-upload-success "bank-account:1693045183269" hdfc-bank-statement-sheet-schema set-value!)]
     ($ :<>
-       ($ :input {:type "file" :on-change (partial on-file-upload idfc-bank-statement-sheet-schema set-value!)})
+       ($ :input {:type "file" :on-change (partial on-file-upload on-file-upload-success)})
        ($ :div {:class "mt-4"} (render-transactions value)))))
 
 (defn init []
